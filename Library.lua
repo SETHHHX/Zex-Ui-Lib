@@ -438,8 +438,10 @@ local Templates = {
     --// Library \\--
     Window = {
         Title = "No Title",
+        Subtitle = "",
         Footer = "No Footer",
         CopyableFooter = true,
+        Closable = true,
 
         Position = UDim2.fromOffset(6, 6),
         Size = UDim2.fromOffset(720, 600),
@@ -16467,7 +16469,7 @@ function Library:CreateWindow(WindowInfo)
     --// Extra room reserved at the right of the top bar for the notification bell
     --// and (when enabled) the minimize button, which sit beside the move icon
     --// rather than in the search row
-    local RightBarInset = (WindowInfo.Minimizable and 28 or 0) + 30
+    local RightBarInset = (WindowInfo.Minimizable and 28 or 0) + (WindowInfo.Closable ~= false and 28 or 0) + 30
 
     do
         Library.KeybindFrame, Library.KeybindContainer = Library:AddDraggableMenu("Keybinds")
@@ -16611,18 +16613,64 @@ function Library:CreateWindow(WindowInfo)
             })
         end
 
-        local X = Library:GetTextBounds(
+        --// Title + optional Subtitle stacked under the hub name
+        local TitleTextColumn = New("Frame", {
+            BackgroundTransparency = 1,
+            Size = UDim2.new(0, 0, 1, 0),
+            AutomaticSize = Enum.AutomaticSize.X,
+            Parent = TitleHolder,
+        })
+        New("UIListLayout", {
+            FillDirection = Enum.FillDirection.Vertical,
+            HorizontalAlignment = Enum.HorizontalAlignment.Left,
+            VerticalAlignment = Enum.VerticalAlignment.Center,
+            Padding = UDim.new(0, 0),
+            Parent = TitleTextColumn,
+        })
+
+        local TitleMaxWidth = math.max(
+            80,
+            (TitleHolder.AbsoluteSize.X / Library.DPIScale)
+                - (WindowInfo.Icon and WindowInfo.IconSize.X.Offset + 6 or 0)
+                - 12
+        )
+        local TitleWidth = Library:GetTextBounds(
             WindowInfo.Title,
             Library.Scheme.Font,
-            20,
-            (TitleHolder.AbsoluteSize.X / Library.DPIScale) - (WindowInfo.Icon and WindowInfo.IconSize.X.Offset + 6 or 0) - 12
+            18,
+            TitleMaxWidth
         )
+        local HasSubtitle = typeof(WindowInfo.Subtitle) == "string" and WindowInfo.Subtitle ~= ""
+        if HasSubtitle then
+            local SubW = Library:GetTextBounds(
+                WindowInfo.Subtitle,
+                Library.Scheme.Font,
+                12,
+                TitleMaxWidth
+            )
+            TitleWidth = math.max(TitleWidth, SubW)
+        end
+
         WindowTitle = New("TextLabel", {
             BackgroundTransparency = 1,
-            Size = UDim2.new(0, X, 1, 0),
+            Size = UDim2.new(0, TitleWidth, 0, HasSubtitle and 18 or 22),
             Text = WindowInfo.Title,
-            TextSize = 20,
-            Parent = TitleHolder,
+            TextSize = HasSubtitle and 17 or 20,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            TextTruncate = Enum.TextTruncate.AtEnd,
+            Parent = TitleTextColumn,
+        })
+
+        local WindowSubtitle = New("TextLabel", {
+            BackgroundTransparency = 1,
+            Size = UDim2.new(0, TitleWidth, 0, 14),
+            Text = HasSubtitle and WindowInfo.Subtitle or "",
+            TextSize = 12,
+            TextTransparency = 0.4,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            TextTruncate = Enum.TextTruncate.AtEnd,
+            Visible = HasSubtitle,
+            Parent = TitleTextColumn,
         })
 
         --// Top Right Bar \\--
@@ -16804,7 +16852,7 @@ function Library:CreateWindow(WindowInfo)
                 AnchorPoint = Vector2.new(1, 0.5),
                 BackgroundColor3 = "MainColor",
                 BackgroundTransparency = 1,
-                Position = UDim2.new(1, -44, 0.5, 0),
+                Position = UDim2.new(1, (WindowInfo.Closable ~= false) and -72 or -44, 0.5, 0),
                 Size = UDim2.fromOffset(24, 24),
                 Text = MinimizeIcon and "" or "—",
                 TextSize = 14,
@@ -17152,6 +17200,72 @@ function Library:CreateWindow(WindowInfo)
             Library:MakeDraggable(MiniFrame, MiniHeader, true)
         end
 
+        --// Close: fully unloads the UI (next to minimize / move)
+        if WindowInfo.Closable ~= false then
+            local CloseBtnIcon = CloseIcon or Library:GetIcon("x")
+
+            local CloseButton = New("TextButton", {
+                AnchorPoint = Vector2.new(1, 0.5),
+                BackgroundColor3 = "MainColor",
+                BackgroundTransparency = 1,
+                Position = UDim2.new(1, -44, 0.5, 0),
+                Size = UDim2.fromOffset(24, 24),
+                Text = CloseBtnIcon and "" or "X",
+                TextSize = 14,
+                TextTransparency = 0.35,
+                ZIndex = 3,
+                Parent = TopBar,
+            })
+            table.insert(
+                Library.Corners,
+                New("UICorner", {
+                    CornerRadius = UDim.new(0, WindowInfo.CornerRadius),
+                    Parent = CloseButton,
+                })
+            )
+
+            local CloseImage
+            if CloseBtnIcon then
+                CloseImage = New("ImageLabel", {
+                    AnchorPoint = Vector2.new(0.5, 0.5),
+                    Image = CloseBtnIcon.Url,
+                    ImageColor3 = "FontColor",
+                    ImageRectOffset = CloseBtnIcon.ImageRectOffset,
+                    ImageRectSize = CloseBtnIcon.ImageRectSize,
+                    ImageTransparency = 0.35,
+                    Position = UDim2.fromScale(0.5, 0.5),
+                    ScaleType = Enum.ScaleType.Fit,
+                    Size = UDim2.fromOffset(14, 14),
+                    Parent = CloseButton,
+                })
+            end
+
+            Library:AddTooltip("Close", nil, CloseButton)
+            CloseButton.MouseEnter:Connect(function()
+                TweenService:Create(CloseButton, Library.TweenInfo, { BackgroundTransparency = 0 }):Play()
+                if CloseImage then
+                    TweenService:Create(CloseImage, Library.TweenInfo, {
+                        ImageTransparency = 0,
+                        ImageColor3 = Library.Scheme.DestructiveColor or Library.Scheme.RedColor,
+                    }):Play()
+                end
+            end)
+            CloseButton.MouseLeave:Connect(function()
+                TweenService:Create(CloseButton, Library.TweenInfo, { BackgroundTransparency = 1 }):Play()
+                if CloseImage then
+                    TweenService:Create(CloseImage, Library.TweenInfo, {
+                        ImageTransparency = 0.35,
+                        ImageColor3 = Library.Scheme.FontColor,
+                    }):Play()
+                end
+            end)
+            CloseButton.MouseButton1Click:Connect(function()
+                if Library.Unload then
+                    Library:Unload()
+                end
+            end)
+        end
+
         if MoveIcon then
             local MoveIconImage = New("ImageLabel", {
                 AnchorPoint = Vector2.new(1, 0.5),
@@ -17168,7 +17282,9 @@ function Library:CreateWindow(WindowInfo)
             --// Notification bell: sits left of the minimize/move cluster and
             --// opens the built-in Notification History, with an unread badge
             local BellIcon = Library:GetIcon("bell")
-            local BellRightOffset = WindowInfo.Minimizable and 72 or 42
+            local BellRightOffset = 42
+                + (WindowInfo.Minimizable and 28 or 0)
+                + (WindowInfo.Closable ~= false and 28 or 0)
 
             local BellButton = New("TextButton", {
                 AnchorPoint = Vector2.new(1, 0.5),
@@ -17594,6 +17710,22 @@ function Library:CreateWindow(WindowInfo)
 
         WindowTitle.Text = title
         WindowInfo.Title = title
+    end
+
+    function Window:ChangeSubtitle(subtitle)
+        assert(typeof(subtitle) == "string", "Expected string for subtitle got: " .. typeof(subtitle))
+        WindowInfo.Subtitle = subtitle
+        if WindowSubtitle then
+            WindowSubtitle.Text = subtitle
+            WindowSubtitle.Visible = subtitle ~= ""
+            if subtitle ~= "" then
+                WindowTitle.TextSize = 17
+                WindowTitle.Size = UDim2.new(WindowTitle.Size.X.Scale, WindowTitle.Size.X.Offset, 0, 18)
+            else
+                WindowTitle.TextSize = 20
+                WindowTitle.Size = UDim2.new(WindowTitle.Size.X.Scale, WindowTitle.Size.X.Offset, 0, 22)
+            end
+        end
     end
 
     function Window:SetBackgroundImage(Image: string)
