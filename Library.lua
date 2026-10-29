@@ -4146,6 +4146,10 @@ end
 
 --// Floating circular icon button (primarily for the mobile menu toggle).
 --// Icon accepts asset id, rbxassetid string, custom asset, or lucide name.
+-- ==============================================================================
+-- ZEX UI LIB - FLOATING TOGGLE BUTTON MEJORADO (DRAGGABLE + POSICION + ANIMACION)
+-- ==============================================================================
+
 function Library:AddFloatingIconButton(Info)
     if typeof(Info) ~= "table" then
         Info = {}
@@ -4154,9 +4158,12 @@ function Library:AddFloatingIconButton(Info)
     local IconSource = Info.Icon
     local Size = typeof(Info.Size) == "number" and Info.Size or 52
     local Callback = Info.Callback or Info.Func or function() end
-    -- Default: true top-center of the screen
-    local Position = Info.Position or UDim2.new(0.5, 0, 0, 14)
-    local AnchorPoint = Info.AnchorPoint or Vector2.new(0.5, 0)
+
+    -- Posición pegada al borde superior sin tapar la ventana (AnchorPoint en el centro)
+    local AnchorPoint = Info.AnchorPoint or Vector2.new(0.5, 0.5)
+    local DefaultY = math.floor(Size / 2) + 6 -- 6px de margen desde el borde superior
+    local Position = Info.Position or UDim2.new(0.5, 0, 0, DefaultY)
+
     local ExcludeScaling = Info.ExcludeScaling
     local ExcludeDragging = Info.ExcludeDragging == true
     local EnablePulse = Info.Pulse ~= false
@@ -4178,6 +4185,7 @@ function Library:AddFloatingIconButton(Info)
         ZIndex = 50,
         Parent = Floats,
     })
+
     table.insert(
         Library.Corners,
         New("UICorner", {
@@ -4205,6 +4213,7 @@ function Library:AddFloatingIconButton(Info)
         Active = false,
         Parent = Button,
     })
+
     table.insert(
         Library.Corners,
         New("UICorner", {
@@ -4217,6 +4226,7 @@ function Library:AddFloatingIconButton(Info)
         Scale = 1,
         Parent = Button,
     })
+
     if not ExcludeScaling then
         table.insert(Library.Scales, ButtonScale)
         Library.ScalesOffset[ButtonScale] = 0
@@ -4257,89 +4267,219 @@ function Library:AddFloatingIconButton(Info)
 
     ApplyIcon(IconSource)
 
-    -- Pulse while menu is closed
-    local PulseTween
+    --// Animación ambiental de respiración (Glow y Ring suaves, sin deformar el botón)
     local GlowPulse
-    local function StartPulse()
-        if not EnablePulse or DraggableButton.Destroyed then
-            return
-        end
-        StopTween(PulseTween, true)
-        StopTween(GlowPulse, true)
-
-        PulseTween = TweenService:Create(
-            ButtonScale,
-            TweenInfo.new(1.15, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
-            { Scale = 1.07 }
-        )
-        GlowPulse = TweenService:Create(
-            Glow,
-            TweenInfo.new(1.15, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
-            { BackgroundTransparency = 0.7, Size = UDim2.new(1, 16, 1, 16) }
-        )
-        PulseTween:Play()
-        GlowPulse:Play()
-    end
+    local RingPulse
 
     local function StopPulse()
-        StopTween(PulseTween, true)
         StopTween(GlowPulse, true)
-        PulseTween = nil
+        StopTween(RingPulse, true)
         GlowPulse = nil
-        if ButtonScale then
-            ButtonScale.Scale = 1
+        RingPulse = nil
+    end
+
+    local function StartPulse()
+        if not EnablePulse or DraggableButton.Destroyed or Library.Toggled then
+            return
         end
-        if Glow and Glow.Parent then
-            Glow.BackgroundTransparency = 0.82
-            Glow.Size = UDim2.new(1, 10, 1, 10)
-        end
+        StopPulse()
+
+        Glow.Size = UDim2.new(1, 8, 1, 8)
+        Glow.BackgroundTransparency = 0.85
+        Ring.Transparency = 0.35
+
+        GlowPulse = TweenService:Create(
+            Glow,
+            TweenInfo.new(1.6, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
+            { BackgroundTransparency = 0.60, Size = UDim2.new(1, 14, 1, 14) }
+        )
+        RingPulse = TweenService:Create(
+            Ring,
+            TweenInfo.new(1.6, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
+            { Transparency = 0.15 }
+        )
+
+        GlowPulse:Play()
+        RingPulse:Play()
     end
 
     DraggableButton.StartPulse = StartPulse
     DraggableButton.StopPulse = StopPulse
 
-    -- Reliable click: use Activated (works for mouse + touch in one event).
-    -- Press visual feedback via InputBegan/Ended without competing drag logic.
-    local Pressed = false
+    --// Animación al abrir / cerrar la interfaz (Giro suave de 90° con rebote)
+    local function UpdateVisualState(isToggled, animated)
+        local tweenTime = animated and 0.32 or 0
+        local tweenInfo = TweenInfo.new(tweenTime, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+
+        if isToggled then
+            StopPulse()
+            if animated then
+                TweenService:Create(IconImage, tweenInfo, { Rotation = 90 }):Play()
+                TweenService:Create(Ring, tweenInfo, { Transparency = 0.05, Thickness = 2.4 }):Play()
+                TweenService:Create(Glow, tweenInfo, { BackgroundTransparency = 0.72, Size = UDim2.new(1, 12, 1, 12) }):Play()
+            else
+                IconImage.Rotation = 90
+                Ring.Transparency = 0.05
+                Ring.Thickness = 2.4
+                Glow.BackgroundTransparency = 0.72
+                Glow.Size = UDim2.new(1, 12, 1, 12)
+            end
+        else
+            if animated then
+                TweenService:Create(IconImage, tweenInfo, { Rotation = 0 }):Play()
+                TweenService:Create(Ring, tweenInfo, { Transparency = 0.25, Thickness = 2 }):Play()
+                TweenService:Create(Glow, tweenInfo, { BackgroundTransparency = 0.82, Size = UDim2.new(1, 10, 1, 10) }):Play()
+            else
+                IconImage.Rotation = 0
+                Ring.Transparency = 0.25
+                Ring.Thickness = 2
+                Glow.BackgroundTransparency = 0.82
+                Glow.Size = UDim2.new(1, 10, 1, 10)
+            end
+
+            StartPulse()
+        end
+    end
+
+    --// Sistema de Arrastre fluido (Touch + Mouse)
+    local Dragging = false
+    local DragInput = nil
+    local DragStartPos = nil
+    local StartCenterPos = nil
+    local DidMove = false
+    local DragThreshold = 7 -- Píxeles necesarios para distinguir entre toque y arrastre
 
     table.insert(DraggableButton.Connections, Button.InputBegan:Connect(function(Input: InputObject)
         if not IsClickInput(Input) then
             return
         end
-        Pressed = true
+
+        Dragging = true
+        DragInput = Input
+        DragStartPos = Vector2.new(Input.Position.X, Input.Position.Y)
+        StartCenterPos = Button.AbsolutePosition + (Button.AbsoluteSize * 0.5)
+        DidMove = false
+
         StopPulse()
-        TweenService:Create(ButtonScale, Library.TweenInfo, { Scale = 0.9 }):Play()
-        TweenService:Create(Ring, Library.TweenInfo, { Transparency = 0.05, Thickness = 2.5 }):Play()
+
+        -- Feedback de toque / click elástico
+        TweenService:Create(ButtonScale, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Scale = 0.92 }):Play()
+        TweenService:Create(Ring, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Transparency = 0.05, Thickness = 2.5 }):Play()
     end))
 
-    table.insert(DraggableButton.Connections, Button.InputEnded:Connect(function(Input: InputObject)
-        if not IsMouseInput(Input) then
+    table.insert(DraggableButton.Connections, UserInputService.InputChanged:Connect(function(Input: InputObject)
+        if not Dragging or not DragInput or ExcludeDragging then
             return
         end
-        if not Pressed then
+
+        local isMouse = (DragInput.UserInputType == Enum.UserInputType.MouseButton1 and Input.UserInputType == Enum.UserInputType.MouseMovement)
+        local isTouch = (DragInput.UserInputType == Enum.UserInputType.Touch and Input == DragInput)
+
+        if not (isMouse or isTouch) then
             return
         end
-        Pressed = false
-        TweenService:Create(ButtonScale, Library.TweenInfo, { Scale = 1 }):Play()
-        TweenService:Create(Ring, Library.TweenInfo, { Transparency = 0.25, Thickness = 2 }):Play()
-        if not Library.Toggled then
-            StartPulse()
+
+        local currentPos = Vector2.new(Input.Position.X, Input.Position.Y)
+        local delta = currentPos - DragStartPos
+
+        if not DidMove and delta.Magnitude >= DragThreshold then
+            DidMove = true
+            -- Animación de "levantamiento" del botón al arrastrarlo
+            TweenService:Create(ButtonScale, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Scale = 1.08 }):Play()
+            TweenService:Create(Ring, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Transparency = 0.1, Thickness = 2.5 }):Play()
+            TweenService:Create(Glow, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { BackgroundTransparency = 0.5, Size = UDim2.new(1, 16, 1, 16) }):Play()
+        end
+
+        if DidMove then
+            local camera = workspace.CurrentCamera
+            local viewport = camera and camera.ViewportSize or Vector2.new(1920, 1080)
+            local halfSize = Size * 0.5
+            local pad = 6
+
+            local targetCenter = StartCenterPos + delta
+            local clampedX = math.clamp(targetCenter.X, halfSize + pad, viewport.X - halfSize - pad)
+            local clampedY = math.clamp(targetCenter.Y, halfSize + pad, viewport.Y - halfSize - pad)
+
+            Button.Position = UDim2.fromOffset(clampedX, clampedY)
         end
     end))
 
+    local function HandleRelease(Input: InputObject)
+        if not Dragging then
+            return
+        end
+
+        local isMatch = (Input == DragInput)
+            or (DragInput and DragInput.UserInputType == Enum.UserInputType.MouseButton1 and Input.UserInputType == Enum.UserInputType.MouseButton1)
+
+        if not isMatch then
+            return
+        end
+
+        local wasDragging = DidMove
+        Dragging = false
+        DragInput = nil
+
+        if wasDragging then
+            -- Animación suave al soltar tras arrastrar
+            TweenService:Create(ButtonScale, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1.0 }):Play()
+            TweenService:Create(Ring, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Transparency = 0.25, Thickness = 2 }):Play()
+            TweenService:Create(Glow, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { BackgroundTransparency = 0.82, Size = UDim2.new(1, 10, 1, 10) }):Play()
+
+            if not Library.Toggled then
+                StartPulse()
+            end
+
+            -- Pequeño retraso para que Activated no se dispare al soltar el arrastre
+            task.delay(0.08, function()
+                DidMove = false
+            end)
+        else
+            -- Click o tap normal
+            TweenService:Create(ButtonScale, TweenInfo.new(0.2, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1.0 }):Play()
+            TweenService:Create(Ring, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Transparency = 0.25, Thickness = 2 }):Play()
+        end
+    end
+
+    table.insert(DraggableButton.Connections, UserInputService.InputEnded:Connect(HandleRelease))
+    table.insert(DraggableButton.Connections, Button.InputEnded:Connect(HandleRelease))
+
+    --// Efecto Hover para PC
+    table.insert(DraggableButton.Connections, Button.MouseEnter:Connect(function()
+        if not Dragging then
+            TweenService:Create(ButtonScale, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Scale = 1.05 }):Play()
+            TweenService:Create(Ring, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Transparency = 0.1 }):Play()
+        end
+    end))
+
+    table.insert(DraggableButton.Connections, Button.MouseLeave:Connect(function()
+        if not Dragging then
+            TweenService:Create(ButtonScale, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Scale = 1.0 }):Play()
+            TweenService:Create(Ring, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Transparency = 0.25 }):Play()
+        end
+    end))
+
+    --// Acción al hacer Click / Tap (solo si no se arrastró)
     table.insert(DraggableButton.Connections, Button.Activated:Connect(function()
-        -- Activated fires once per successful press/release on the button itself
-        Library:SafeCallback(Callback, DraggableButton)
-    end))
-
-    -- Keep pulse in sync with menu open/closed
-    task.defer(function()
-        if DraggableButton.Destroyed then
+        if DidMove then
             return
         end
-        if not Library.Toggled then
-            StartPulse()
-        end
+
+        Library:SafeCallback(Callback, DraggableButton)
+
+        -- Micro-rebote de confirmación
+        TweenService:Create(ButtonScale, TweenInfo.new(0.08, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Scale = 0.9 }):Play()
+        task.delay(0.08, function()
+            if not DraggableButton.Destroyed and not Dragging then
+                TweenService:Create(ButtonScale, TweenInfo.new(0.22, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1.0 }):Play()
+            end
+        end)
+    end))
+
+    -- Sincronizar con el estado de apertura de la ventana
+    task.defer(function()
+        if DraggableButton.Destroyed then return end
+        UpdateVisualState(Library.Toggled, false)
     end)
 
     local lastToggled = Library.Toggled
@@ -4349,11 +4489,7 @@ function Library:AddFloatingIconButton(Info)
         end
         if Library.Toggled ~= lastToggled then
             lastToggled = Library.Toggled
-            if Library.Toggled then
-                StopPulse()
-            else
-                StartPulse()
-            end
+            UpdateVisualState(lastToggled, true)
         end
     end))
 
@@ -4374,22 +4510,6 @@ function Library:AddFloatingIconButton(Info)
         end
         Button.Position = Pos
     end
-
-    -- Optional drag (off by default for the mobile toggle so clicks stay reliable)
-    if not ExcludeDragging then
-        Library:MakeDraggable(Button, Button, true)
-        if not table.find(Library.DraggableElements, Button) then
-            table.insert(Library.DraggableElements, Button)
-        end
-        -- PositionDraggable only understands offset coords; skip it when using scale
-        if Position.X.Scale == 0 and Position.Y.Scale == 0 then
-            PositionDraggable(Button, Button.Position)
-        end
-    end
-
-    -- Force the requested scale position (never let layout helpers override center)
-    Button.AnchorPoint = AnchorPoint
-    Button.Position = Position
 
     DraggableButton.Button = Button
     DraggableButton.Icon = IconImage
