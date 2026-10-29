@@ -4154,12 +4154,12 @@ function Library:AddFloatingIconButton(Info)
     end
 
     local IconSource = Info.Icon
-    local Size = typeof(Info.Size) == "number" and Info.Size or 50
+    local Size = typeof(Info.Size) == "number" and Info.Size or 52
     local Callback = Info.Callback or Info.Func or function() end
-
-    -- Posición pegada arriba de todo (Y: 0)
     local AnchorPoint = Info.AnchorPoint or Vector2.new(0.5, 0)
-    local Position = Info.Position or UDim2.new(0.5, 0, 0, 0)
+    local Position = Info.Position or UDim2.new(0.5, 0, 0, 4)
+    local EnablePulse = Info.Pulse ~= false
+    local DragThreshold = typeof(Info.DragThreshold) == "number" and Info.DragThreshold or 8
 
     local DraggableButton = {
         Connections = {},
@@ -4178,14 +4178,10 @@ function Library:AddFloatingIconButton(Info)
         ZIndex = 100,
         Parent = Floats,
     })
-
-    table.insert(
-        Library.Corners,
-        New("UICorner", {
-            CornerRadius = UDim.new(1, 0),
-            Parent = Button,
-        })
-    )
+    table.insert(Library.Corners, New("UICorner", {
+        CornerRadius = UDim.new(1, 0),
+        Parent = Button,
+    }))
 
     local Ring = New("UIStroke", {
         ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
@@ -4206,14 +4202,10 @@ function Library:AddFloatingIconButton(Info)
         Active = false,
         Parent = Button,
     })
-
-    table.insert(
-        Library.Corners,
-        New("UICorner", {
-            CornerRadius = UDim.new(1, 0),
-            Parent = Glow,
-        })
-    )
+    table.insert(Library.Corners, New("UICorner", {
+        CornerRadius = UDim.new(1, 0),
+        Parent = Glow,
+    }))
 
     local ButtonScale = New("UIScale", {
         Scale = 1,
@@ -4235,7 +4227,9 @@ function Library:AddFloatingIconButton(Info)
     })
 
     local function ApplyIcon(Source)
-        if not Source then return end
+        if not Source then
+            return
+        end
         local IconData = Library:GetCustomIcon(Source)
         if IconData then
             Library:ApplyLucideIcon(IconImage, IconData)
@@ -4250,61 +4244,135 @@ function Library:AddFloatingIconButton(Info)
             IconImage.ImageRectSize = Vector2.zero
         end
     end
-
     ApplyIcon(IconSource)
 
-    --// Sistema de Arrastre directo y Click (Touch y Mouse)
+    local PulseTween, GlowPulse
+    local function StartPulse()
+        if not EnablePulse or DraggableButton.Destroyed then
+            return
+        end
+        StopTween(PulseTween, true)
+        StopTween(GlowPulse, true)
+        PulseTween = TweenService:Create(
+            ButtonScale,
+            TweenInfo.new(1.15, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
+            { Scale = 1.07 }
+        )
+        GlowPulse = TweenService:Create(
+            Glow,
+            TweenInfo.new(1.15, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
+            { BackgroundTransparency = 0.7, Size = UDim2.new(1, 14, 1, 14) }
+        )
+        PulseTween:Play()
+        GlowPulse:Play()
+    end
+    local function StopPulse()
+        StopTween(PulseTween, true)
+        StopTween(GlowPulse, true)
+        PulseTween, GlowPulse = nil, nil
+        if ButtonScale then
+            ButtonScale.Scale = 1
+        end
+        if Glow and Glow.Parent then
+            Glow.BackgroundTransparency = 0.85
+            Glow.Size = UDim2.new(1, 8, 1, 8)
+        end
+    end
+    DraggableButton.StartPulse = StartPulse
+    DraggableButton.StopPulse = StopPulse
+
+    -- Drag with click threshold: small movement = toggle, larger = drag
     local dragging = false
-    local dragStart = nil
-    local startPos = nil
     local didMove = false
+    local dragStart -- InputObject.Position at press
+    local frameStart -- Button.AbsolutePosition at press
 
     table.insert(DraggableButton.Connections, Button.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            dragging = true
-            dragStart = input.Position
-            startPos = Button.Position
-            didMove = false
-
-            -- Animación limpia y rápida al presionar (micro-press)
-            TweenService:Create(ButtonScale, TweenInfo.new(0.1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Scale = 0.88 }):Play()
-            TweenService:Create(Ring, TweenInfo.new(0.1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Transparency = 0 }):Play()
-
-            local conn
-            conn = input.Changed:Connect(function()
-                if input.UserInputState == Enum.UserInputState.End then
-                    dragging = false
-                    conn:Disconnect()
-
-                    -- Animación suave al soltar
-                    TweenService:Create(ButtonScale, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Scale = 1 }):Play()
-                    TweenService:Create(Ring, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Transparency = 0.2 }):Play()
-
-                    -- Si no se movió más de 6 píxeles, cuenta como Click para abrir/cerrar
-                    if not didMove then
-                        Library:SafeCallback(Callback, DraggableButton)
-                    end
-                end
-            end)
+        if not IsClickInput(input) then
+            return
         end
+        if Library.CantDragForced then
+            return
+        end
+
+        dragging = true
+        didMove = false
+        dragStart = input.Position
+        frameStart = Button.AbsolutePosition
+
+        StopPulse()
+        TweenService:Create(ButtonScale, Library.TweenInfo, { Scale = 0.92 }):Play()
+        TweenService:Create(Ring, Library.TweenInfo, { Transparency = 0.05 }):Play()
+
+        local conn
+        conn = input.Changed:Connect(function()
+            if input.UserInputState ~= Enum.UserInputState.End then
+                return
+            end
+            dragging = false
+            if conn and conn.Connected then
+                conn:Disconnect()
+            end
+
+            TweenService:Create(ButtonScale, Library.TweenInfo, { Scale = 1 }):Play()
+            TweenService:Create(Ring, Library.TweenInfo, { Transparency = 0.2 }):Play()
+
+            if not didMove then
+                Library:SafeCallback(Callback, DraggableButton)
+            end
+
+            if not Library.Toggled then
+                StartPulse()
+            end
+        end)
     end))
 
     table.insert(DraggableButton.Connections, UserInputService.InputChanged:Connect(function(input)
-        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-            local delta = input.Position - dragStart
-            if delta.Magnitude > 6 then
-                didMove = true
+        if not dragging then
+            return
+        end
+        if input.UserInputType ~= Enum.UserInputType.MouseMovement
+            and input.UserInputType ~= Enum.UserInputType.Touch then
+            return
+        end
+
+        local delta = input.Position - dragStart
+        if delta.Magnitude > DragThreshold then
+            didMove = true
+        end
+
+        -- Position as offset from parent using absolute coords (works from any scale start)
+        local parent = Button.Parent
+        local parentPos = parent and parent.AbsolutePosition or Vector2.zero
+        local newAbs = frameStart + delta
+        Button.AnchorPoint = Vector2.new(0, 0)
+        Button.Position = UDim2.fromOffset(newAbs.X - parentPos.X, newAbs.Y - parentPos.Y)
+    end))
+
+    task.defer(function()
+        if not DraggableButton.Destroyed and not Library.Toggled then
+            StartPulse()
+        end
+    end)
+
+    local lastToggled = Library.Toggled
+    table.insert(DraggableButton.Connections, RunService.Heartbeat:Connect(function()
+        if DraggableButton.Destroyed then
+            return
+        end
+        if Library.Toggled ~= lastToggled then
+            lastToggled = Library.Toggled
+            if Library.Toggled then
+                StopPulse()
+            else
+                StartPulse()
             end
-            Button.Position = UDim2.new(
-                startPos.X.Scale,
-                startPos.X.Offset + delta.X,
-                startPos.Y.Scale,
-                startPos.Y.Offset + delta.Y
-            )
         end
     end))
 
-    function DraggableButton:SetIcon(Source) ApplyIcon(Source) end
+    function DraggableButton:SetIcon(Source)
+        ApplyIcon(Source)
+    end
     function DraggableButton:SetSize(NewSize)
         Size = NewSize
         Button.Size = UDim2.fromOffset(Size, Size)
@@ -4312,8 +4380,17 @@ function Library:AddFloatingIconButton(Info)
         IconImage.Size = UDim2.new(1, -Pad * 2, 1, -Pad * 2)
     end
     function DraggableButton:SetPosition(Pos, Anchor)
-        if Anchor then Button.AnchorPoint = Anchor end
+        if Anchor then
+            Button.AnchorPoint = Anchor
+        end
         Button.Position = Pos
+    end
+
+    Button.AnchorPoint = AnchorPoint
+    Button.Position = Position
+
+    if not table.find(Library.DraggableElements, Button) then
+        table.insert(Library.DraggableElements, Button)
     end
 
     DraggableButton.Button = Button
@@ -4323,6 +4400,7 @@ function Library:AddFloatingIconButton(Info)
 
     function DraggableButton:Destroy()
         DraggableButton.Destroyed = true
+        StopPulse()
         if DraggableButton.Connections then
             for _, conn in DraggableButton.Connections do
                 if typeof(conn) == "RBXScriptConnection" and conn.Connected then
@@ -4330,7 +4408,13 @@ function Library:AddFloatingIconButton(Info)
                 end
             end
         end
-        if Button then Button:Destroy() end
+        local idx = table.find(Library.DraggableElements, Button)
+        if idx then
+            table.remove(Library.DraggableElements, idx)
+        end
+        if Button then
+            Button:Destroy()
+        end
     end
 
     return DraggableButton
@@ -17100,19 +17184,13 @@ function Library:CreateWindow(WindowInfo)
                 end
             end)
             MinimizeButton.MouseButton1Click:Connect(function()
-                --// On mobile we only hide the UI; the floating icon re-opens it.
-                --// Desktop keeps the minimized pill card.
-                if Library.IsMobile then
-                    Library:Toggle(false)
-                else
-                    Library.Window:SetMinimized(true)
-                end
+                --// Always just hide the window; reopen with the floating icon (PC + mobile).
+                Library:Toggle(false)
             end)
 
-            --// The minimized card (desktop only). Mobile uses the floating icon instead.
-            if Library.IsMobile then
-                -- skip MiniFrame entirely
-            else MiniFrame = New("Frame", {
+            --// Minimized pill disabled on all platforms; floating icon reopens the UI.
+            if false then
+                MiniFrame = New("Frame", {
                 AutomaticSize = Enum.AutomaticSize.Y,
                 BackgroundColor3 = function()
                     return Library:GetBetterColor(Library.Scheme.BackgroundColor, -1)
@@ -22439,8 +22517,8 @@ function Library:CreateWindow(WindowInfo)
         task.spawn(Library.Toggle)
     end
 
-    if Library.IsMobile then
-        --// Single floating circular icon (top-center). No Lock / extra text buttons.
+    --// Floating toggle icon on PC and mobile (hide with ShowMobileButtons = false)
+    if WindowInfo.ShowMobileButtons ~= false then
         local ToggleIconSource = WindowInfo.MobileToggleIcon
             or WindowInfo.Icon
             or "menu"
@@ -22450,30 +22528,23 @@ function Library:CreateWindow(WindowInfo)
         local ToggleButton = Library:AddFloatingIconButton({
             Icon = ToggleIconSource,
             Size = ToggleSize,
-            -- true top-center of the screen
-            Position = UDim2.new(0.5, 0, 0, 14),
+            Position = UDim2.new(0.5, 0, 0, 4),
             AnchorPoint = Vector2.new(0.5, 0),
             Callback = function()
                 Library:Toggle()
             end,
-            ExcludeScaling = true,
-            ExcludeDragging = true, -- no drag: keeps Activated reliable on mobile
             Pulse = true,
         })
 
-        -- Re-apply center after any layout helpers (AbsoluteSize settles next frame)
         task.defer(function()
             if ToggleButton and ToggleButton.Button and ToggleButton.Button.Parent then
                 ToggleButton.Button.AnchorPoint = Vector2.new(0.5, 0)
-                ToggleButton.Button.Position = UDim2.new(0.5, 0, 0, 14)
+                ToggleButton.Button.Position = UDim2.new(0.5, 0, 0, 4)
             end
         end)
 
-        if WindowInfo.ShowMobileButtons == false then
-            ToggleButton.Button.Visible = false
-        end
-
         Window.MobileToggleButton = ToggleButton
+        Window.FloatingToggleButton = ToggleButton
         Window.MobileLockButton = nil
     end
 
