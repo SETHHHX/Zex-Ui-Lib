@@ -490,8 +490,8 @@ local Templates = {
         --// Accepts asset id (number), "rbxassetid://...", custom asset path, or lucide name.
         --// Falls back to Window.Icon, then lucide "menu".
         MobileToggleIcon = nil,
-        MobileToggleSize = 48,
-        ShowMobileLockButton = true,
+        MobileToggleSize = 52,
+        ShowMobileLockButton = false,
 
         UnlockMouseWhileOpen = true,
 
@@ -4152,12 +4152,14 @@ function Library:AddFloatingIconButton(Info)
     end
 
     local IconSource = Info.Icon
-    local Size = typeof(Info.Size) == "number" and Info.Size or 48
+    local Size = typeof(Info.Size) == "number" and Info.Size or 52
     local Callback = Info.Callback or Info.Func or function() end
-    local Position = Info.Position or UDim2.fromOffset(6, 6)
-    local AnchorPoint = Info.AnchorPoint or Vector2.new(0, 0)
+    -- Default: top-center, slightly below the top edge
+    local Position = Info.Position or UDim2.new(0.5, 0, 0, 16)
+    local AnchorPoint = Info.AnchorPoint or Vector2.new(0.5, 0)
     local ExcludeScaling = Info.ExcludeScaling
     local ExcludeDragging = Info.ExcludeDragging
+    local EnablePulse = Info.Pulse ~= false
 
     local DraggableButton = {
         Connections = {},
@@ -4170,31 +4172,56 @@ function Library:AddFloatingIconButton(Info)
         AnchorPoint = AnchorPoint,
         Size = UDim2.fromOffset(Size, Size),
         Image = "",
-        ImageColor3 = "FontColor",
-        ScaleType = Enum.ScaleType.Fit,
         AutoButtonColor = false,
-        ZIndex = 1,
+        ZIndex = 50,
         Parent = Floats,
     })
     table.insert(
         Library.Corners,
         New("UICorner", {
-            CornerRadius = UDim.new(1, 0), -- fully circular
+            CornerRadius = UDim.new(1, 0),
             Parent = Button,
         })
     )
-    if not ExcludeScaling then
-        table.insert(
-            Library.Scales,
-            New("UIScale", {
-                Parent = Button,
-            })
-        )
-    end
-    Library:AddOutline(Button)
 
-    -- slight padding for the icon inside the circle
-    local IconPadding = math.max(8, math.floor(Size * 0.22))
+    -- Soft accent ring
+    local Ring = New("UIStroke", {
+        ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+        Color = "AccentColor",
+        Thickness = 2,
+        Transparency = 0.25,
+        Parent = Button,
+    })
+
+    -- Outer soft glow ring (thicker, more transparent)
+    local Glow = New("Frame", {
+        Name = "Glow",
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        BackgroundColor3 = "AccentColor",
+        BackgroundTransparency = 0.82,
+        Position = UDim2.fromScale(0.5, 0.5),
+        Size = UDim2.new(1, 10, 1, 10),
+        ZIndex = 49,
+        Parent = Button,
+    })
+    table.insert(
+        Library.Corners,
+        New("UICorner", {
+            CornerRadius = UDim.new(1, 0),
+            Parent = Glow,
+        })
+    )
+
+    local ButtonScale = New("UIScale", {
+        Scale = 1,
+        Parent = Button,
+    })
+    if not ExcludeScaling then
+        table.insert(Library.Scales, ButtonScale)
+        Library.ScalesOffset[ButtonScale] = 0
+    end
+
+    local IconPadding = math.max(10, math.floor(Size * 0.2))
     local IconImage = New("ImageLabel", {
         BackgroundTransparency = 1,
         AnchorPoint = Vector2.new(0.5, 0.5),
@@ -4203,7 +4230,7 @@ function Library:AddFloatingIconButton(Info)
         Image = "",
         ImageColor3 = "FontColor",
         ScaleType = Enum.ScaleType.Fit,
-        ZIndex = 2,
+        ZIndex = 51,
         Parent = Button,
     })
 
@@ -4214,9 +4241,8 @@ function Library:AddFloatingIconButton(Info)
         local IconData = Library:GetCustomIcon(Source)
         if IconData then
             Library:ApplyLucideIcon(IconImage, IconData)
-            Button.Image = "" -- keep outer clean
+            Button.Image = ""
         else
-            -- raw asset string / number fallback
             local Id = Source
             if typeof(Id) == "number" then
                 Id = "rbxassetid://" .. tostring(Id)
@@ -4229,11 +4255,53 @@ function Library:AddFloatingIconButton(Info)
 
     ApplyIcon(IconSource)
 
-    local MaxClickDistance = ExcludeDragging and 12 or math.huge
+    -- Gentle idle pulse (scale + ring opacity) while the menu is closed
+    local PulseTween
+    local GlowPulse
+    local function StartPulse()
+        if not EnablePulse or DraggableButton.Destroyed then
+            return
+        end
+        StopTween(PulseTween, true)
+        StopTween(GlowPulse, true)
+
+        PulseTween = TweenService:Create(
+            ButtonScale,
+            TweenInfo.new(1.15, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
+            { Scale = 1.07 }
+        )
+        GlowPulse = TweenService:Create(
+            Glow,
+            TweenInfo.new(1.15, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
+            { BackgroundTransparency = 0.7, Size = UDim2.new(1, 16, 1, 16) }
+        )
+        PulseTween:Play()
+        GlowPulse:Play()
+    end
+
+    local function StopPulse()
+        StopTween(PulseTween, true)
+        StopTween(GlowPulse, true)
+        PulseTween = nil
+        GlowPulse = nil
+        ButtonScale.Scale = 1
+        Glow.BackgroundTransparency = 0.82
+        Glow.Size = UDim2.new(1, 10, 1, 10)
+    end
+
+    DraggableButton.StartPulse = StartPulse
+    DraggableButton.StopPulse = StopPulse
+
+    -- Press / click handling with scale feedback
+    local MaxClickDistance = ExcludeDragging and 18 or math.huge
     Button.InputBegan:Connect(function(Input: InputObject)
         if not IsClickInput(Input) then
             return
         end
+
+        StopPulse()
+        TweenService:Create(ButtonScale, Library.TweenInfo, { Scale = 0.9 }):Play()
+        TweenService:Create(Ring, Library.TweenInfo, { Transparency = 0.05, Thickness = 2.5 }):Play()
 
         local StartPos = Input.Position
         local Changed
@@ -4242,8 +4310,16 @@ function Library:AddFloatingIconButton(Info)
                 return
             end
 
+            TweenService:Create(ButtonScale, Library.TweenInfo, { Scale = 1 }):Play()
+            TweenService:Create(Ring, Library.TweenInfo, { Transparency = 0.25, Thickness = 2 }):Play()
+
             if (Input.Position - StartPos).Magnitude <= MaxClickDistance then
                 Library:SafeCallback(Callback, DraggableButton)
+            end
+
+            -- Resume pulse only when the main UI is hidden
+            if not Library.Toggled then
+                StartPulse()
             end
 
             if Changed and Changed.Connected then
@@ -4253,17 +4329,30 @@ function Library:AddFloatingIconButton(Info)
         end)
     end)
 
-    -- hover feedback (desktop)
-    Button.MouseEnter:Connect(function()
-        TweenService:Create(Button, Library.TweenInfo, {
-            BackgroundColor3 = Library:GetBetterColor(Library.Scheme.BackgroundColor, 15),
-        }):Play()
-    end)
-    Button.MouseLeave:Connect(function()
-        TweenService:Create(Button, Library.TweenInfo, {
-            BackgroundColor3 = Library.Scheme.BackgroundColor,
-        }):Play()
-    end)
+    -- Sync pulse with window toggle state
+    table.insert(DraggableButton.Connections, task.spawn(function()
+        -- wait one frame so Library.Toggled is reliable
+        task.wait()
+        if not Library.Toggled then
+            StartPulse()
+        end
+    end))
+
+    -- When the library toggles, stop/start pulse
+    local lastToggled = Library.Toggled
+    table.insert(DraggableButton.Connections, RunService.Heartbeat:Connect(function()
+        if DraggableButton.Destroyed then
+            return
+        end
+        if Library.Toggled ~= lastToggled then
+            lastToggled = Library.Toggled
+            if Library.Toggled then
+                StopPulse()
+            else
+                StartPulse()
+            end
+        end
+    end))
 
     function DraggableButton:SetIcon(Source)
         ApplyIcon(Source)
@@ -4272,13 +4361,15 @@ function Library:AddFloatingIconButton(Info)
     function DraggableButton:SetSize(NewSize: number)
         Size = NewSize
         Button.Size = UDim2.fromOffset(Size, Size)
-        local Pad = math.max(8, math.floor(Size * 0.22))
+        local Pad = math.max(10, math.floor(Size * 0.2))
         IconImage.Size = UDim2.new(1, -Pad * 2, 1, -Pad * 2)
     end
 
     Library:MakeDraggable(Button, Button, true)
     DraggableButton.Button = Button
     DraggableButton.Icon = IconImage
+    DraggableButton.Ring = Ring
+    DraggableButton.Glow = Glow
 
     if not table.find(Library.DraggableElements, Button) then
         table.insert(Library.DraggableElements, Button)
@@ -4288,10 +4379,13 @@ function Library:AddFloatingIconButton(Info)
 
     function DraggableButton:Destroy()
         DraggableButton.Destroyed = true
+        StopPulse()
 
         if DraggableButton.Connections then
             for _, connection in DraggableButton.Connections do
-                connection:Disconnect()
+                if typeof(connection) == "RBXScriptConnection" and connection.Connected then
+                    connection:Disconnect()
+                end
             end
         end
 
@@ -16757,9 +16851,14 @@ function Library:CreateWindow(WindowInfo)
         })
         New("UIListLayout", {
             FillDirection = Enum.FillDirection.Horizontal,
-            HorizontalAlignment = Enum.HorizontalAlignment.Center,
+            HorizontalAlignment = Enum.HorizontalAlignment.Left,
             VerticalAlignment = Enum.VerticalAlignment.Center,
-            Padding = UDim.new(0, 6),
+            Padding = UDim.new(0, 8),
+            Parent = TitleHolder,
+        })
+        New("UIPadding", {
+            PaddingLeft = UDim.new(0, 12),
+            PaddingRight = UDim.new(0, 8),
             Parent = TitleHolder,
         })
 
@@ -16794,7 +16893,7 @@ function Library:CreateWindow(WindowInfo)
             FillDirection = Enum.FillDirection.Vertical,
             HorizontalAlignment = Enum.HorizontalAlignment.Left,
             VerticalAlignment = Enum.VerticalAlignment.Center,
-            Padding = UDim.new(0, 0),
+            Padding = UDim.new(0, 1),
             Parent = TitleTextColumn,
         })
 
@@ -16802,8 +16901,8 @@ function Library:CreateWindow(WindowInfo)
         local TitleMaxWidth = math.max(
             80,
             InitialLeftWidth
-                - (WindowInfo.Icon and WindowInfo.IconSize.X.Offset + 6 or 0)
-                - 12
+                - (WindowInfo.Icon and WindowInfo.IconSize.X.Offset + 8 or 0)
+                - 12 - 8 - 8 -- left pad, right pad, safety
         )
         local TitleWidth = Library:GetTextBounds(
             WindowInfo.Title,
@@ -22399,59 +22498,33 @@ function Library:CreateWindow(WindowInfo)
     end
 
     if Library.IsMobile then
-        --// Floating circular icon for toggling the UI (replaces old text "Toggle")
+        --// Single floating circular icon (top-center). No Lock / extra text buttons.
         local ToggleIconSource = WindowInfo.MobileToggleIcon
             or WindowInfo.Icon
             or "menu"
 
-        local ToggleSize = typeof(WindowInfo.MobileToggleSize) == "number" and WindowInfo.MobileToggleSize or 48
+        local ToggleSize = typeof(WindowInfo.MobileToggleSize) == "number" and WindowInfo.MobileToggleSize or 52
 
         local ToggleButton = Library:AddFloatingIconButton({
             Icon = ToggleIconSource,
             Size = ToggleSize,
+            -- top-center, a bit down from the very top edge
+            Position = UDim2.new(0.5, 0, 0, 14),
+            AnchorPoint = Vector2.new(0.5, 0),
             Callback = function()
                 Library:Toggle()
             end,
             ExcludeScaling = true,
             ExcludeDragging = true,
+            Pulse = true,
         })
-
-        local LockButton
-        if WindowInfo.ShowMobileLockButton ~= false then
-            LockButton = Library:AddDraggableButton("Lock", function(self)
-                Library.CantDragForced = not Library.CantDragForced
-                self:SetText(Library.CantDragForced and "Unlock" or "Lock")
-            end, true, true)
-        end
-
-        if WindowInfo.MobileButtonsSide == "Right" then
-            ToggleButton.Button.AnchorPoint = Vector2.new(1, 0)
-            ToggleButton.Button.Position = UDim2.new(1, -6, 0, 6)
-
-            if LockButton then
-                LockButton.Button.AnchorPoint = Vector2.new(1, 0)
-                LockButton.Button.Position = UDim2.new(1, -(ToggleSize + 12), 0, 6)
-            end
-        else
-            ToggleButton.Button.AnchorPoint = Vector2.new(0, 0)
-            ToggleButton.Button.Position = UDim2.fromOffset(6, 6)
-
-            if LockButton then
-                LockButton.Button.AnchorPoint = Vector2.new(0, 0)
-                LockButton.Button.Position = UDim2.fromOffset(ToggleSize + 12, 6)
-            end
-        end
 
         if WindowInfo.ShowMobileButtons == false then
             ToggleButton.Button.Visible = false
-            if LockButton then
-                LockButton.Button.Visible = false
-            end
         end
 
-        -- expose so scripts can change the icon later if needed
         Window.MobileToggleButton = ToggleButton
-        Window.MobileLockButton = LockButton
+        Window.MobileLockButton = nil
     end
 
     --// Execution \\--
