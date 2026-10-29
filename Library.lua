@@ -16923,7 +16923,7 @@ function Library:CreateWindow(WindowInfo)
             SnowLayer.Visible = false
         end
 
-        function Window:SetSnowEnabled(Enabled: boolean)
+        local function SetSnowEnabled(Enabled: boolean)
             SnowEnabled = Enabled == true
             SnowLayer.Visible = SnowEnabled
             if SnowEnabled then
@@ -16933,9 +16933,13 @@ function Library:CreateWindow(WindowInfo)
             end
         end
 
-        function Window:IsSnowEnabled()
+        local function IsSnowEnabled()
             return SnowEnabled
         end
+
+        -- Methods attached after local Window = {} exists
+        Library.__SnowSetEnabled = SetSnowEnabled
+        Library.__SnowIsEnabled = IsSnowEnabled
 
         if SnowEnabled then
             task.defer(StartSnow)
@@ -18133,6 +18137,13 @@ function Library:CreateWindow(WindowInfo)
     --// Window Table \\--
     local Window = {}
     local Fading = false
+
+    if Library.__SnowSetEnabled then
+        Window.SetSnowEnabled = Library.__SnowSetEnabled
+        Window.IsSnowEnabled = Library.__SnowIsEnabled
+        Library.__SnowSetEnabled = nil
+        Library.__SnowIsEnabled = nil
+    end
 
     local function SetUICorner(UICorner, Corner, HalfValue)
         local Current = UICorner[Corner]
