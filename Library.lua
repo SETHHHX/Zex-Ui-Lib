@@ -486,6 +486,12 @@ local Templates = {
 
         ShowMobileButtons = true,
         MobileButtonsSide = "Left",
+        --// Floating icon button that replaces the old text "Toggle" on mobile.
+        --// Accepts asset id (number), "rbxassetid://...", custom asset path, or lucide name.
+        --// Falls back to Window.Icon, then lucide "menu".
+        MobileToggleIcon = nil,
+        MobileToggleSize = 48,
+        ShowMobileLockButton = true,
 
         UnlockMouseWhileOpen = true,
 
@@ -4109,6 +4115,170 @@ function Library:AddDraggableButton(...)
     Library:MakeDraggable(Button, Button, true)
     DraggableButton:SetText(Text)
     DraggableButton.Button = Button
+
+    if not table.find(Library.DraggableElements, Button) then
+        table.insert(Library.DraggableElements, Button)
+    end
+
+    PositionDraggable(Button, Button.Position)
+
+    function DraggableButton:Destroy()
+        DraggableButton.Destroyed = true
+
+        if DraggableButton.Connections then
+            for _, connection in DraggableButton.Connections do
+                connection:Disconnect()
+            end
+        end
+
+        local ElemIdx = table.find(Library.DraggableElements, Button)
+        if ElemIdx then
+            table.remove(Library.DraggableElements, ElemIdx)
+        end
+
+        if Button then
+            Button:Destroy()
+        end
+    end
+
+    return DraggableButton
+end
+
+--// Floating circular icon button (primarily for the mobile menu toggle).
+--// Icon accepts asset id, rbxassetid string, custom asset, or lucide name.
+function Library:AddFloatingIconButton(Info)
+    if typeof(Info) ~= "table" then
+        Info = {}
+    end
+
+    local IconSource = Info.Icon
+    local Size = typeof(Info.Size) == "number" and Info.Size or 48
+    local Callback = Info.Callback or Info.Func or function() end
+    local Position = Info.Position or UDim2.fromOffset(6, 6)
+    local AnchorPoint = Info.AnchorPoint or Vector2.new(0, 0)
+    local ExcludeScaling = Info.ExcludeScaling
+    local ExcludeDragging = Info.ExcludeDragging
+
+    local DraggableButton = {
+        Connections = {},
+        Destroyed = false,
+    }
+
+    local Button = New("ImageButton", {
+        BackgroundColor3 = "BackgroundColor",
+        Position = Position,
+        AnchorPoint = AnchorPoint,
+        Size = UDim2.fromOffset(Size, Size),
+        Image = "",
+        ImageColor3 = "FontColor",
+        ScaleType = Enum.ScaleType.Fit,
+        AutoButtonColor = false,
+        ZIndex = 1,
+        Parent = Floats,
+    })
+    table.insert(
+        Library.Corners,
+        New("UICorner", {
+            CornerRadius = UDim.new(1, 0), -- fully circular
+            Parent = Button,
+        })
+    )
+    if not ExcludeScaling then
+        table.insert(
+            Library.Scales,
+            New("UIScale", {
+                Parent = Button,
+            })
+        )
+    end
+    Library:AddOutline(Button)
+
+    -- slight padding for the icon inside the circle
+    local IconPadding = math.max(8, math.floor(Size * 0.22))
+    local IconImage = New("ImageLabel", {
+        BackgroundTransparency = 1,
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.fromScale(0.5, 0.5),
+        Size = UDim2.new(1, -IconPadding * 2, 1, -IconPadding * 2),
+        Image = "",
+        ImageColor3 = "FontColor",
+        ScaleType = Enum.ScaleType.Fit,
+        ZIndex = 2,
+        Parent = Button,
+    })
+
+    local function ApplyIcon(Source)
+        if not Source then
+            return
+        end
+        local IconData = Library:GetCustomIcon(Source)
+        if IconData then
+            Library:ApplyLucideIcon(IconImage, IconData)
+            Button.Image = "" -- keep outer clean
+        else
+            -- raw asset string / number fallback
+            local Id = Source
+            if typeof(Id) == "number" then
+                Id = "rbxassetid://" .. tostring(Id)
+            end
+            IconImage.Image = tostring(Id)
+            IconImage.ImageRectOffset = Vector2.zero
+            IconImage.ImageRectSize = Vector2.zero
+        end
+    end
+
+    ApplyIcon(IconSource)
+
+    local MaxClickDistance = ExcludeDragging and 12 or math.huge
+    Button.InputBegan:Connect(function(Input: InputObject)
+        if not IsClickInput(Input) then
+            return
+        end
+
+        local StartPos = Input.Position
+        local Changed
+        Changed = Input.Changed:Connect(function()
+            if Input.UserInputState ~= Enum.UserInputState.End then
+                return
+            end
+
+            if (Input.Position - StartPos).Magnitude <= MaxClickDistance then
+                Library:SafeCallback(Callback, DraggableButton)
+            end
+
+            if Changed and Changed.Connected then
+                Changed:Disconnect()
+                Changed = nil
+            end
+        end)
+    end)
+
+    -- hover feedback (desktop)
+    Button.MouseEnter:Connect(function()
+        TweenService:Create(Button, Library.TweenInfo, {
+            BackgroundColor3 = Library:GetBetterColor(Library.Scheme.BackgroundColor, 15),
+        }):Play()
+    end)
+    Button.MouseLeave:Connect(function()
+        TweenService:Create(Button, Library.TweenInfo, {
+            BackgroundColor3 = Library.Scheme.BackgroundColor,
+        }):Play()
+    end)
+
+    function DraggableButton:SetIcon(Source)
+        ApplyIcon(Source)
+    end
+
+    function DraggableButton:SetSize(NewSize: number)
+        Size = NewSize
+        Button.Size = UDim2.fromOffset(Size, Size)
+        local Pad = math.max(8, math.floor(Size * 0.22))
+        IconImage.Size = UDim2.new(1, -Pad * 2, 1, -Pad * 2)
+    end
+
+    Library:MakeDraggable(Button, Button, true)
+    DraggableButton.Button = Button
+    DraggableButton.Icon = IconImage
 
     if not table.find(Library.DraggableElements, Button) then
         table.insert(Library.DraggableElements, Button)
@@ -16628,9 +16798,10 @@ function Library:CreateWindow(WindowInfo)
             Parent = TitleTextColumn,
         })
 
+        --// Use InitialLeftWidth (sidebar width) instead of AbsoluteSize which is often 0 at construction time
         local TitleMaxWidth = math.max(
             80,
-            (TitleHolder.AbsoluteSize.X / Library.DPIScale)
+            InitialLeftWidth
                 - (WindowInfo.Icon and WindowInfo.IconSize.X.Offset + 6 or 0)
                 - 12
         )
@@ -16657,7 +16828,6 @@ function Library:CreateWindow(WindowInfo)
             Text = WindowInfo.Title,
             TextSize = HasSubtitle and 17 or 20,
             TextXAlignment = Enum.TextXAlignment.Left,
-            TextTruncate = Enum.TextTruncate.AtEnd,
             Parent = TitleTextColumn,
         })
 
@@ -16668,7 +16838,6 @@ function Library:CreateWindow(WindowInfo)
             TextSize = 12,
             TextTransparency = 0.4,
             TextXAlignment = Enum.TextXAlignment.Left,
-            TextTruncate = Enum.TextTruncate.AtEnd,
             Visible = HasSubtitle,
             Parent = TitleTextColumn,
         })
@@ -22230,33 +22399,59 @@ function Library:CreateWindow(WindowInfo)
     end
 
     if Library.IsMobile then
-        local ToggleButton = Library:AddDraggableButton("Toggle", function()
-            Library:Toggle()
-        end, true, true)
+        --// Floating circular icon for toggling the UI (replaces old text "Toggle")
+        local ToggleIconSource = WindowInfo.MobileToggleIcon
+            or WindowInfo.Icon
+            or "menu"
 
-        local LockButton = Library:AddDraggableButton("Lock", function(self)
-            Library.CantDragForced = not Library.CantDragForced
-            self:SetText(Library.CantDragForced and "Unlock" or "Lock")
-        end, true, true)
+        local ToggleSize = typeof(WindowInfo.MobileToggleSize) == "number" and WindowInfo.MobileToggleSize or 48
+
+        local ToggleButton = Library:AddFloatingIconButton({
+            Icon = ToggleIconSource,
+            Size = ToggleSize,
+            Callback = function()
+                Library:Toggle()
+            end,
+            ExcludeScaling = true,
+            ExcludeDragging = true,
+        })
+
+        local LockButton
+        if WindowInfo.ShowMobileLockButton ~= false then
+            LockButton = Library:AddDraggableButton("Lock", function(self)
+                Library.CantDragForced = not Library.CantDragForced
+                self:SetText(Library.CantDragForced and "Unlock" or "Lock")
+            end, true, true)
+        end
 
         if WindowInfo.MobileButtonsSide == "Right" then
             ToggleButton.Button.AnchorPoint = Vector2.new(1, 0)
             ToggleButton.Button.Position = UDim2.new(1, -6, 0, 6)
 
-            LockButton.Button.AnchorPoint = Vector2.new(1, 0)
-            LockButton.Button.Position = UDim2.new(1, -(ToggleButton.Button.Size.X.Offset + 12), 0, 6)
+            if LockButton then
+                LockButton.Button.AnchorPoint = Vector2.new(1, 0)
+                LockButton.Button.Position = UDim2.new(1, -(ToggleSize + 12), 0, 6)
+            end
         else
             ToggleButton.Button.AnchorPoint = Vector2.new(0, 0)
             ToggleButton.Button.Position = UDim2.fromOffset(6, 6)
 
-            LockButton.Button.AnchorPoint = Vector2.new(0, 0)
-            LockButton.Button.Position = UDim2.fromOffset(ToggleButton.Button.Size.X.Offset + 12, 6)
+            if LockButton then
+                LockButton.Button.AnchorPoint = Vector2.new(0, 0)
+                LockButton.Button.Position = UDim2.fromOffset(ToggleSize + 12, 6)
+            end
         end
 
         if WindowInfo.ShowMobileButtons == false then
             ToggleButton.Button.Visible = false
-            LockButton.Button.Visible = false
+            if LockButton then
+                LockButton.Button.Visible = false
+            end
         end
+
+        -- expose so scripts can change the icon later if needed
+        Window.MobileToggleButton = ToggleButton
+        Window.MobileLockButton = LockButton
     end
 
     --// Execution \\--
