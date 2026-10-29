@@ -1979,7 +1979,7 @@ local ModalElement = New("TextButton", {
 local Floats = New("Frame", {
     BackgroundTransparency = 1,
     Size = UDim2.fromScale(1, 1),
-    ZIndex = 10,
+    ZIndex = 100,
     Active = false,
     Parent = ScreenGui,
 })
@@ -4159,7 +4159,7 @@ function Library:AddFloatingIconButton(Info)
     local AnchorPoint = Info.AnchorPoint or Vector2.new(0.5, 0)
     local Position = Info.Position or UDim2.new(0.5, 0, 0, 4)
     local EnablePulse = Info.Pulse ~= false
-    local DragThreshold = typeof(Info.DragThreshold) == "number" and Info.DragThreshold or 8
+    local DragThreshold = typeof(Info.DragThreshold) == "number" and Info.DragThreshold or 10
 
     local DraggableButton = {
         Connections = {},
@@ -4175,13 +4175,14 @@ function Library:AddFloatingIconButton(Info)
         AutoButtonColor = false,
         Active = true,
         Selectable = false,
-        ZIndex = 100,
+        ZIndex = 200,
         Parent = Floats,
     })
     table.insert(Library.Corners, New("UICorner", {
         CornerRadius = UDim.new(1, 0),
         Parent = Button,
     }))
+    Library:AddOutline(Button)
 
     local Ring = New("UIStroke", {
         ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
@@ -4198,7 +4199,7 @@ function Library:AddFloatingIconButton(Info)
         BackgroundTransparency = 0.85,
         Position = UDim2.fromScale(0.5, 0.5),
         Size = UDim2.new(1, 8, 1, 8),
-        ZIndex = 99,
+        ZIndex = 199,
         Active = false,
         Parent = Button,
     })
@@ -4221,7 +4222,7 @@ function Library:AddFloatingIconButton(Info)
         Image = "",
         ImageColor3 = "FontColor",
         ScaleType = Enum.ScaleType.Fit,
-        ZIndex = 101,
+        ZIndex = 201,
         Active = false,
         Parent = Button,
     })
@@ -4246,9 +4247,10 @@ function Library:AddFloatingIconButton(Info)
     end
     ApplyIcon(IconSource)
 
+    local draggingActive = false
     local PulseTween, GlowPulse
     local function StartPulse()
-        if not EnablePulse or DraggableButton.Destroyed then
+        if not EnablePulse or DraggableButton.Destroyed or draggingActive then
             return
         end
         StopTween(PulseTween, true)
@@ -4281,43 +4283,99 @@ function Library:AddFloatingIconButton(Info)
     DraggableButton.StartPulse = StartPulse
     DraggableButton.StopPulse = StopPulse
 
-    -- Drag with click threshold: small movement = toggle, larger = drag
-    local dragging = false
+    -- Drag state (shared with pulse guard)
     local didMove = false
-    local dragStart -- InputObject.Position at press
-    local frameStart -- Button.AbsolutePosition at press
+    local dragStartPos
+    local buttonStartAbs
+    local activeInput
+    local moveConn
+    local endConn
+
+    local function CleanupDrag()
+        if moveConn then
+            moveConn:Disconnect()
+            moveConn = nil
+        end
+        if endConn then
+            endConn:Disconnect()
+            endConn = nil
+        end
+        activeInput = nil
+        draggingActive = false
+    end
 
     table.insert(DraggableButton.Connections, Button.InputBegan:Connect(function(input)
+        if draggingActive then
+            return
+        end
         if not IsClickInput(input) then
             return
         end
-        if Library.CantDragForced then
-            return
-        end
 
-        dragging = true
+        draggingActive = true
         didMove = false
-        dragStart = input.Position
-        frameStart = Button.AbsolutePosition
+        activeInput = input
+        dragStartPos = input.Position
+        buttonStartAbs = Button.AbsolutePosition
 
         StopPulse()
-        TweenService:Create(ButtonScale, Library.TweenInfo, { Scale = 0.92 }):Play()
-        TweenService:Create(Ring, Library.TweenInfo, { Transparency = 0.05 }):Play()
+        ButtonScale.Scale = 0.94
+        Ring.Transparency = 0.05
 
-        local conn
-        conn = input.Changed:Connect(function()
-            if input.UserInputState ~= Enum.UserInputState.End then
+        moveConn = UserInputService.InputChanged:Connect(function(change)
+            if not draggingActive or not activeInput then
                 return
             end
-            dragging = false
-            if conn and conn.Connected then
-                conn:Disconnect()
+            if change.UserInputType ~= Enum.UserInputType.MouseMovement
+                and change.UserInputType ~= Enum.UserInputType.Touch then
+                return
+            end
+            -- For mouse, only track while primary button is held
+            if change.UserInputType == Enum.UserInputType.MouseMovement then
+                if not UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
+                    return
+                end
+            end
+            -- For touch, only the same finger
+            if change.UserInputType == Enum.UserInputType.Touch and change ~= activeInput then
+                -- still allow: some platforms re-emit; use position delta from original start
             end
 
-            TweenService:Create(ButtonScale, Library.TweenInfo, { Scale = 1 }):Play()
-            TweenService:Create(Ring, Library.TweenInfo, { Transparency = 0.2 }):Play()
+            local delta = change.Position - dragStartPos
+            if delta.Magnitude >= DragThreshold then
+                didMove = true
+            end
 
-            if not didMove then
+            local parent = Button.Parent
+            local parentPos = parent and parent.AbsolutePosition or Vector2.zero
+            local newAbs = buttonStartAbs + delta
+            Button.AnchorPoint = Vector2.new(0, 0)
+            Button.Position = UDim2.fromOffset(
+                newAbs.X - parentPos.X,
+                newAbs.Y - parentPos.Y
+            )
+        end)
+
+        endConn = UserInputService.InputEnded:Connect(function(ended)
+            if not draggingActive then
+                return
+            end
+            local isSame = (ended == activeInput)
+                or (ended.UserInputType == Enum.UserInputType.MouseButton1)
+                or (ended.UserInputType == Enum.UserInputType.Touch and activeInput
+                    and activeInput.UserInputType == Enum.UserInputType.Touch)
+
+            if not isSame then
+                return
+            end
+
+            local wasMove = didMove
+            CleanupDrag()
+
+            ButtonScale.Scale = 1
+            Ring.Transparency = 0.2
+
+            if not wasMove then
                 Library:SafeCallback(Callback, DraggableButton)
             end
 
@@ -4325,28 +4383,6 @@ function Library:AddFloatingIconButton(Info)
                 StartPulse()
             end
         end)
-    end))
-
-    table.insert(DraggableButton.Connections, UserInputService.InputChanged:Connect(function(input)
-        if not dragging then
-            return
-        end
-        if input.UserInputType ~= Enum.UserInputType.MouseMovement
-            and input.UserInputType ~= Enum.UserInputType.Touch then
-            return
-        end
-
-        local delta = input.Position - dragStart
-        if delta.Magnitude > DragThreshold then
-            didMove = true
-        end
-
-        -- Position as offset from parent using absolute coords (works from any scale start)
-        local parent = Button.Parent
-        local parentPos = parent and parent.AbsolutePosition or Vector2.zero
-        local newAbs = frameStart + delta
-        Button.AnchorPoint = Vector2.new(0, 0)
-        Button.Position = UDim2.fromOffset(newAbs.X - parentPos.X, newAbs.Y - parentPos.Y)
     end))
 
     task.defer(function()
@@ -4400,6 +4436,7 @@ function Library:AddFloatingIconButton(Info)
 
     function DraggableButton:Destroy()
         DraggableButton.Destroyed = true
+        CleanupDrag()
         StopPulse()
         if DraggableButton.Connections then
             for _, conn in DraggableButton.Connections do
@@ -16767,6 +16804,7 @@ function Library:CreateWindow(WindowInfo)
             Text = "",
             Position = WindowInfo.Position,
             Size = WindowInfo.Size,
+            ClipsDescendants = true,
             Visible = false,
             Parent = ScreenGui,
         })
@@ -16790,6 +16828,118 @@ function Library:CreateWindow(WindowInfo)
             Position = UDim2.fromOffset(0, 48),
             Size = UDim2.new(1, 0, 0, 1),
         })
+
+        --// Snow particle layer (behind all content, non-interactive)
+        local SnowEnabled = WindowInfo.Snow ~= false
+        local SnowCount = typeof(WindowInfo.SnowCount) == "number" and WindowInfo.SnowCount or 28
+        local SnowLayer = New("Frame", {
+            Name = "SnowLayer",
+            BackgroundTransparency = 1,
+            Size = UDim2.fromScale(1, 1),
+            ClipsDescendants = true,
+            ZIndex = 0,
+            Active = false,
+            Visible = SnowEnabled,
+            Parent = MainFrame,
+        })
+        local Snowflakes = {}
+        local SnowConn
+
+        local function ResetFlake(flake)
+            local parentSize = SnowLayer.AbsoluteSize
+            local w = math.max(parentSize.X, 100)
+            local h = math.max(parentSize.Y, 100)
+            flake.X = math.random() * w
+            flake.Y = -math.random(4, 40)
+            flake.Speed = 18 + math.random() * 42
+            flake.Drift = (math.random() - 0.5) * 22
+            flake.Phase = math.random() * math.pi * 2
+            flake.Size = 2 + math.random() * 4
+            flake.Label.Size = UDim2.fromOffset(flake.Size + 4, flake.Size + 4)
+            flake.Label.TextTransparency = 0.25 + math.random() * 0.45
+        end
+
+        local function BuildSnow()
+            for _, f in Snowflakes do
+                if f.Label then
+                    f.Label:Destroy()
+                end
+            end
+            table.clear(Snowflakes)
+
+            for i = 1, SnowCount do
+                local label = New("TextLabel", {
+                    BackgroundTransparency = 1,
+                    Text = "•",
+                    TextColor3 = Color3.new(1, 1, 1),
+                    TextSize = 14,
+                    FontFace = Font.fromEnum(Enum.Font.Gotham),
+                    ZIndex = 0,
+                    Active = false,
+                    Parent = SnowLayer,
+                })
+                local flake = { Label = label }
+                ResetFlake(flake)
+                -- scatter initial Y across the window
+                flake.Y = math.random() * math.max(SnowLayer.AbsoluteSize.Y, 200)
+                flake.Label.Position = UDim2.fromOffset(flake.X, flake.Y)
+                Snowflakes[i] = flake
+            end
+        end
+
+        local function StartSnow()
+            if SnowConn then
+                return
+            end
+            BuildSnow()
+            SnowConn = RunService.RenderStepped:Connect(function(dt)
+                if not SnowEnabled or not MainFrame or not MainFrame.Parent then
+                    return
+                end
+                if not MainFrame.Visible then
+                    return
+                end
+                local h = math.max(SnowLayer.AbsoluteSize.Y, 1)
+                local w = math.max(SnowLayer.AbsoluteSize.X, 1)
+                for _, flake in Snowflakes do
+                    flake.Phase += dt
+                    flake.Y += flake.Speed * dt
+                    flake.X += (flake.Drift + math.sin(flake.Phase * 1.3) * 10) * dt
+                    if flake.Y > h + 10 then
+                        ResetFlake(flake)
+                    end
+                    if flake.X < -10 then
+                        flake.X = w + 5
+                    elseif flake.X > w + 10 then
+                        flake.X = -5
+                    end
+                    flake.Label.Position = UDim2.fromOffset(flake.X, flake.Y)
+                end
+            end)
+            table.insert(Library.Signals, SnowConn)
+        end
+
+        local function StopSnowVisual()
+            SnowLayer.Visible = false
+        end
+
+        function Window:SetSnowEnabled(Enabled: boolean)
+            SnowEnabled = Enabled == true
+            SnowLayer.Visible = SnowEnabled
+            if SnowEnabled then
+                StartSnow()
+            else
+                StopSnowVisual()
+            end
+        end
+
+        function Window:IsSnowEnabled()
+            return SnowEnabled
+        end
+
+        if SnowEnabled then
+            task.defer(StartSnow)
+        end
 
         DividerLine = New("Frame", {
             BackgroundColor3 = "OutlineColor",
