@@ -4159,13 +4159,14 @@ function Library:AddFloatingIconButton(Info)
     local AnchorPoint = Info.AnchorPoint or Vector2.new(0.5, 0)
     local Position = Info.Position or UDim2.new(0.5, 0, 0, 4)
     local EnablePulse = Info.Pulse ~= false
-    local DragThreshold = typeof(Info.DragThreshold) == "number" and Info.DragThreshold or 10
+    local DragThreshold = typeof(Info.DragThreshold) == "number" and Info.DragThreshold or 8
 
     local DraggableButton = {
         Connections = {},
         Destroyed = false,
     }
 
+    -- Parent to ScreenGui (not Floats) so nothing can cover input; high ZIndex
     local Button = New("ImageButton", {
         BackgroundColor3 = "BackgroundColor",
         Position = Position,
@@ -4175,8 +4176,8 @@ function Library:AddFloatingIconButton(Info)
         AutoButtonColor = false,
         Active = true,
         Selectable = false,
-        ZIndex = 200,
-        Parent = Floats,
+        ZIndex = 5000,
+        Parent = ScreenGui,
     })
     table.insert(Library.Corners, New("UICorner", {
         CornerRadius = UDim.new(1, 0),
@@ -4199,7 +4200,7 @@ function Library:AddFloatingIconButton(Info)
         BackgroundTransparency = 0.85,
         Position = UDim2.fromScale(0.5, 0.5),
         Size = UDim2.new(1, 8, 1, 8),
-        ZIndex = 199,
+        ZIndex = 4999,
         Active = false,
         Parent = Button,
     })
@@ -4222,7 +4223,7 @@ function Library:AddFloatingIconButton(Info)
         Image = "",
         ImageColor3 = "FontColor",
         ScaleType = Enum.ScaleType.Fit,
-        ZIndex = 201,
+        ZIndex = 5001,
         Active = false,
         Parent = Button,
     })
@@ -4249,6 +4250,7 @@ function Library:AddFloatingIconButton(Info)
 
     local draggingActive = false
     local PulseTween, GlowPulse
+
     local function StartPulse()
         if not EnablePulse or DraggableButton.Destroyed or draggingActive then
             return
@@ -4268,6 +4270,7 @@ function Library:AddFloatingIconButton(Info)
         PulseTween:Play()
         GlowPulse:Play()
     end
+
     local function StopPulse()
         StopTween(PulseTween, true)
         StopTween(GlowPulse, true)
@@ -4280,18 +4283,18 @@ function Library:AddFloatingIconButton(Info)
             Glow.Size = UDim2.new(1, 8, 1, 8)
         end
     end
+
     DraggableButton.StartPulse = StartPulse
     DraggableButton.StopPulse = StopPulse
 
-    -- Drag state (shared with pulse guard)
+    -- Drag + click (threshold). Does NOT use IsClickInput / IsRobloxFocused.
     local didMove = false
-    local dragStartPos
-    local buttonStartAbs
-    local activeInput
+    local dragStart
+    local originAbs
     local moveConn
     local endConn
 
-    local function CleanupDrag()
+    local function EndDrag(fireClick: boolean?)
         if moveConn then
             moveConn:Disconnect()
             moveConn = nil
@@ -4300,88 +4303,69 @@ function Library:AddFloatingIconButton(Info)
             endConn:Disconnect()
             endConn = nil
         end
-        activeInput = nil
         draggingActive = false
+        ButtonScale.Scale = 1
+        Ring.Transparency = 0.2
+
+        if fireClick and not didMove then
+            Library:SafeCallback(Callback, DraggableButton)
+        end
+        if not Library.Toggled then
+            StartPulse()
+        end
     end
 
     table.insert(DraggableButton.Connections, Button.InputBegan:Connect(function(input)
         if draggingActive then
             return
         end
-        if not IsClickInput(input) then
+        if input.UserInputType ~= Enum.UserInputType.MouseButton1
+            and input.UserInputType ~= Enum.UserInputType.Touch then
+            return
+        end
+        if input.UserInputState ~= Enum.UserInputState.Begin then
             return
         end
 
         draggingActive = true
         didMove = false
-        activeInput = input
-        dragStartPos = input.Position
-        buttonStartAbs = Button.AbsolutePosition
+        dragStart = input.Position
+        originAbs = Button.AbsolutePosition
 
         StopPulse()
         ButtonScale.Scale = 0.94
         Ring.Transparency = 0.05
 
         moveConn = UserInputService.InputChanged:Connect(function(change)
-            if not draggingActive or not activeInput then
+            if not draggingActive then
                 return
             end
             if change.UserInputType ~= Enum.UserInputType.MouseMovement
                 and change.UserInputType ~= Enum.UserInputType.Touch then
                 return
             end
-            -- For mouse, only track while primary button is held
-            if change.UserInputType == Enum.UserInputType.MouseMovement then
-                if not UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
-                    return
-                end
-            end
-            -- For touch, only the same finger
-            if change.UserInputType == Enum.UserInputType.Touch and change ~= activeInput then
-                -- still allow: some platforms re-emit; use position delta from original start
-            end
 
-            local delta = change.Position - dragStartPos
+            local delta = change.Position - dragStart
             if delta.Magnitude >= DragThreshold then
                 didMove = true
             end
 
-            local parent = Button.Parent
-            local parentPos = parent and parent.AbsolutePosition or Vector2.zero
-            local newAbs = buttonStartAbs + delta
+            -- Screen-space position (ScreenGui parent AbsolutePosition is ~0,0)
+            local newX = originAbs.X + delta.X
+            local newY = originAbs.Y + delta.Y
             Button.AnchorPoint = Vector2.new(0, 0)
-            Button.Position = UDim2.fromOffset(
-                newAbs.X - parentPos.X,
-                newAbs.Y - parentPos.Y
-            )
+            Button.Position = UDim2.fromOffset(newX, newY)
         end)
 
         endConn = UserInputService.InputEnded:Connect(function(ended)
             if not draggingActive then
                 return
             end
-            local isSame = (ended == activeInput)
-                or (ended.UserInputType == Enum.UserInputType.MouseButton1)
-                or (ended.UserInputType == Enum.UserInputType.Touch and activeInput
-                    and activeInput.UserInputType == Enum.UserInputType.Touch)
-
-            if not isSame then
+            if ended.UserInputType ~= Enum.UserInputType.MouseButton1
+                and ended.UserInputType ~= Enum.UserInputType.Touch then
                 return
             end
-
-            local wasMove = didMove
-            CleanupDrag()
-
-            ButtonScale.Scale = 1
-            Ring.Transparency = 0.2
-
-            if not wasMove then
-                Library:SafeCallback(Callback, DraggableButton)
-            end
-
-            if not Library.Toggled then
-                StartPulse()
-            end
+            EndDrag(true)
         end)
     end))
 
@@ -4436,7 +4420,7 @@ function Library:AddFloatingIconButton(Info)
 
     function DraggableButton:Destroy()
         DraggableButton.Destroyed = true
-        CleanupDrag()
+        EndDrag(false)
         StopPulse()
         if DraggableButton.Connections then
             for _, conn in DraggableButton.Connections do
@@ -16832,12 +16816,13 @@ function Library:CreateWindow(WindowInfo)
         --// Snow particle layer (behind all content, non-interactive)
         local SnowEnabled = WindowInfo.Snow ~= false
         local SnowCount = typeof(WindowInfo.SnowCount) == "number" and WindowInfo.SnowCount or 28
+        --// High ZIndex so flakes draw over the whole UI; Active=false so clicks pass through
         local SnowLayer = New("Frame", {
             Name = "SnowLayer",
             BackgroundTransparency = 1,
             Size = UDim2.fromScale(1, 1),
             ClipsDescendants = true,
-            ZIndex = 0,
+            ZIndex = 1000,
             Active = false,
             Visible = SnowEnabled,
             Parent = MainFrame,
@@ -16856,7 +16841,7 @@ function Library:CreateWindow(WindowInfo)
             flake.Phase = math.random() * math.pi * 2
             flake.Size = 2 + math.random() * 4
             flake.Label.Size = UDim2.fromOffset(flake.Size + 4, flake.Size + 4)
-            flake.Label.TextTransparency = 0.25 + math.random() * 0.45
+            flake.Label.TextTransparency = 0.15 + math.random() * 0.35
         end
 
         local function BuildSnow()
@@ -16870,11 +16855,11 @@ function Library:CreateWindow(WindowInfo)
             for i = 1, SnowCount do
                 local label = New("TextLabel", {
                     BackgroundTransparency = 1,
-                    Text = "•",
-                    TextColor3 = Color3.new(1, 1, 1),
-                    TextSize = 14,
+                    Text = "*",
+                    TextColor3 = Color3.fromRGB(230, 240, 255),
+                    TextSize = 12,
                     FontFace = Font.fromEnum(Enum.Font.Gotham),
-                    ZIndex = 0,
+                    ZIndex = 1001,
                     Active = false,
                     Parent = SnowLayer,
                 })
@@ -22696,13 +22681,6 @@ function Library:CreateWindow(WindowInfo)
             end,
             Pulse = true,
         })
-
-        task.defer(function()
-            if ToggleButton and ToggleButton.Button and ToggleButton.Button.Parent then
-                ToggleButton.Button.AnchorPoint = Vector2.new(0.5, 0)
-                ToggleButton.Button.Position = UDim2.new(0.5, 0, 0, 4)
-            end
-        end)
 
         Window.MobileToggleButton = ToggleButton
         Window.FloatingToggleButton = ToggleButton
