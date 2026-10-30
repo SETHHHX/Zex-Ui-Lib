@@ -16813,74 +16813,85 @@ function Library:CreateWindow(WindowInfo)
             Size = UDim2.new(1, 0, 0, 1),
         })
 
-        --// Snow particle layer (behind all content, non-interactive)
+        --// ============================================================
+        --// Snow overlay: lives on ScreenGui, tracks MainFrame every frame.
+        --// Uses small Frames (not text) so nothing can "freeze" invisibly.
+        --// ============================================================
         local SnowEnabled = WindowInfo.Snow ~= false
-        local SnowCount = typeof(WindowInfo.SnowCount) == "number" and WindowInfo.SnowCount or 28
-        --// High ZIndex so flakes draw over the whole UI; Active=false so clicks pass through
+        local SnowCount = typeof(WindowInfo.SnowCount) == "number" and math.clamp(WindowInfo.SnowCount, 5, 80) or 28
+
         local SnowLayer = New("Frame", {
             Name = "SnowLayer",
             BackgroundTransparency = 1,
-            Size = UDim2.fromScale(1, 1),
+            BorderSizePixel = 0,
+            Size = UDim2.fromOffset(0, 0),
+            Position = UDim2.fromOffset(0, 0),
             ClipsDescendants = true,
-            ZIndex = 1000,
+            ZIndex = 2500,
             Active = false,
-            Visible = SnowEnabled,
-            Parent = MainFrame,
+            Visible = false,
+            Parent = ScreenGui,
         })
-        local Snowflakes = {}
-        local SnowConn
+        table.insert(Library.Corners, New("UICorner", {
+            CornerRadius = UDim.new(0, WindowInfo.CornerRadius),
+            Parent = SnowLayer,
+        }))
 
-        local function GetSnowBounds(): (number, number)
-            -- Prefer MainFrame size; SnowLayer can report 0 while hidden
-            local size = MainFrame and MainFrame.AbsoluteSize or Vector2.zero
-            if size.X < 32 or size.Y < 32 then
-                size = SnowLayer.AbsoluteSize
+        local Snowflakes = {}
+        local SnowConn = nil
+
+        local function SyncSnowLayer()
+            if not MainFrame or not MainFrame.Parent then
+                return 0, 0
             end
-            if size.X < 32 or size.Y < 32 then
-                local win = WindowInfo.Size
-                return math.max(win.X.Offset, 320), math.max(win.Y.Offset, 240)
-            end
-            return size.X, size.Y
+            local absPos = MainFrame.AbsolutePosition
+            local absSize = MainFrame.AbsoluteSize
+            SnowLayer.Position = UDim2.fromOffset(absPos.X, absPos.Y)
+            SnowLayer.Size = UDim2.fromOffset(math.max(absSize.X, 1), math.max(absSize.Y, 1))
+            return absSize.X, absSize.Y
         end
 
-        local function ResetFlake(flake)
-            local w, h = GetSnowBounds()
+        local function ResetFlake(flake, w, h)
+            w = math.max(w or 1, 1)
+            h = math.max(h or 1, 1)
             flake.X = math.random() * w
-            flake.Y = -math.random(4, 40)
-            flake.Speed = 18 + math.random() * 42
-            flake.Drift = (math.random() - 0.5) * 22
+            flake.Y = -math.random(2, 30)
+            flake.Speed = 22 + math.random() * 50
+            flake.Drift = (math.random() - 0.5) * 28
             flake.Phase = math.random() * math.pi * 2
-            flake.Size = 2 + math.random() * 4
-            if flake.Label then
-                flake.Label.Size = UDim2.fromOffset(flake.Size + 4, flake.Size + 4)
-                flake.Label.TextTransparency = 0.15 + math.random() * 0.35
-            end
+            local s = 2 + math.random() * 3
+            flake.Dot.Size = UDim2.fromOffset(s, s)
+            flake.Dot.BackgroundTransparency = 0.15 + math.random() * 0.4
         end
 
         local function BuildSnow()
-            for _, f in Snowflakes do
-                if f.Label then
-                    f.Label:Destroy()
+            for _, flake in Snowflakes do
+                if flake.Dot then
+                    flake.Dot:Destroy()
                 end
             end
             table.clear(Snowflakes)
 
-            local w, h = GetSnowBounds()
+            local w, h = SyncSnowLayer()
+            if w < 8 then w = math.max(WindowInfo.Size.X.Offset, 400) end
+            if h < 8 then h = math.max(WindowInfo.Size.Y.Offset, 300) end
+
             for i = 1, SnowCount do
-                local label = New("TextLabel", {
-                    BackgroundTransparency = 1,
-                    Text = "*",
-                    TextColor3 = Color3.fromRGB(230, 240, 255),
-                    TextSize = 12,
-                    FontFace = Font.fromEnum(Enum.Font.Gotham),
-                    ZIndex = 1001,
+                local dot = New("Frame", {
+                    BackgroundColor3 = Color3.fromRGB(235, 245, 255),
+                    BorderSizePixel = 0,
+                    ZIndex = 2501,
                     Active = false,
                     Parent = SnowLayer,
                 })
-                local flake = { Label = label }
-                ResetFlake(flake)
+                table.insert(Library.Corners, New("UICorner", {
+                    CornerRadius = UDim.new(1, 0),
+                    Parent = dot,
+                }))
+                local flake = { Dot = dot, X = 0, Y = 0, Speed = 30, Drift = 0, Phase = 0 }
+                ResetFlake(flake, w, h)
                 flake.Y = math.random() * h
-                flake.Label.Position = UDim2.fromOffset(flake.X, flake.Y)
+                flake.Dot.Position = UDim2.fromOffset(flake.X, flake.Y)
                 Snowflakes[i] = flake
             end
         end
@@ -16899,37 +16910,40 @@ function Library:CreateWindow(WindowInfo)
         end
 
         local function StartSnow()
-            SnowLayer.Visible = true
+            SnowEnabled = true
             BuildSnow()
-            -- Always (re)connect so animation never stays frozen after config load / toggle
+            SnowLayer.Visible = true
             DisconnectSnow()
 
-            SnowConn = RunService.Heartbeat:Connect(function(dt)
+            SnowConn = RunService.RenderStepped:Connect(function(dt)
                 if not SnowEnabled then
                     return
                 end
                 if not MainFrame or not MainFrame.Parent or not MainFrame.Visible then
+                    SnowLayer.Visible = false
                     return
                 end
-                if not SnowLayer.Visible then
+                SnowLayer.Visible = true
+                local w, h = SyncSnowLayer()
+                if w < 8 or h < 8 then
                     return
                 end
-                local w, h = GetSnowBounds()
+                dt = math.clamp(dt, 0, 0.05)
                 for i = 1, #Snowflakes do
                     local flake = Snowflakes[i]
-                    if flake and flake.Label and flake.Label.Parent then
+                    if flake and flake.Dot and flake.Dot.Parent then
                         flake.Phase = flake.Phase + dt
                         flake.Y = flake.Y + flake.Speed * dt
-                        flake.X = flake.X + (flake.Drift + math.sin(flake.Phase * 1.3) * 10) * dt
-                        if flake.Y > h + 10 then
-                            ResetFlake(flake)
+                        flake.X = flake.X + (flake.Drift + math.sin(flake.Phase * 1.4) * 12) * dt
+                        if flake.Y > h + 12 then
+                            ResetFlake(flake, w, h)
                         end
-                        if flake.X < -10 then
-                            flake.X = w + 5
-                        elseif flake.X > w + 10 then
-                            flake.X = -5
+                        if flake.X < -8 then
+                            flake.X = w + 4
+                        elseif flake.X > w + 8 then
+                            flake.X = -4
                         end
-                        flake.Label.Position = UDim2.fromOffset(flake.X, flake.Y)
+                        flake.Dot.Position = UDim2.fromOffset(flake.X, flake.Y)
                     end
                 end
             end)
@@ -16937,18 +16951,15 @@ function Library:CreateWindow(WindowInfo)
         end
 
         local function StopSnowVisual()
+            SnowEnabled = false
             SnowLayer.Visible = false
-            -- keep connection alive (cheap early-return); reconnect on enable rebuilds flakes
         end
 
         local function SetSnowEnabled(Enabled: boolean)
-            SnowEnabled = Enabled == true
-            if SnowEnabled then
-                -- defer one frame so layout/AbsoluteSize are valid after config load
+            if Enabled then
+                -- wait a frame so MainFrame has real AbsoluteSize after config/load
                 task.defer(function()
-                    if SnowEnabled then
-                        StartSnow()
-                    end
+                    task.defer(StartSnow)
                 end)
             else
                 StopSnowVisual()
@@ -16956,15 +16967,18 @@ function Library:CreateWindow(WindowInfo)
         end
 
         local function IsSnowEnabled()
-            return SnowEnabled
+            return SnowEnabled == true
         end
 
-        -- Methods attached after local Window = {} exists
         Library.__SnowSetEnabled = SetSnowEnabled
         Library.__SnowIsEnabled = IsSnowEnabled
 
         if SnowEnabled then
-            task.defer(StartSnow)
+            task.delay(0.15, function()
+                if SnowEnabled and MainFrame and MainFrame.Parent then
+                    StartSnow()
+                end
+            end)
         end
 
         DividerLine = New("Frame", {
