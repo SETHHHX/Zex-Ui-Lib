@@ -16885,39 +16885,52 @@ function Library:CreateWindow(WindowInfo)
             end
         end
 
+        local function DisconnectSnow()
+            if SnowConn then
+                if SnowConn.Connected then
+                    SnowConn:Disconnect()
+                end
+                local idx = table.find(Library.Signals, SnowConn)
+                if idx then
+                    table.remove(Library.Signals, idx)
+                end
+                SnowConn = nil
+            end
+        end
+
         local function StartSnow()
             SnowLayer.Visible = true
-            -- Always rebuild so toggle off/on and config load work reliably
             BuildSnow()
+            -- Always (re)connect so animation never stays frozen after config load / toggle
+            DisconnectSnow()
 
-            if SnowConn and SnowConn.Connected then
-                return
-            end
-
-            SnowConn = RunService.RenderStepped:Connect(function(dt)
-                if not SnowEnabled or not MainFrame or not MainFrame.Parent then
+            SnowConn = RunService.Heartbeat:Connect(function(dt)
+                if not SnowEnabled then
                     return
                 end
-                if not MainFrame.Visible or not SnowLayer.Visible then
+                if not MainFrame or not MainFrame.Parent or not MainFrame.Visible then
+                    return
+                end
+                if not SnowLayer.Visible then
                     return
                 end
                 local w, h = GetSnowBounds()
-                for _, flake in Snowflakes do
-                    if not flake.Label or not flake.Label.Parent then
-                        continue
+                for i = 1, #Snowflakes do
+                    local flake = Snowflakes[i]
+                    if flake and flake.Label and flake.Label.Parent then
+                        flake.Phase = flake.Phase + dt
+                        flake.Y = flake.Y + flake.Speed * dt
+                        flake.X = flake.X + (flake.Drift + math.sin(flake.Phase * 1.3) * 10) * dt
+                        if flake.Y > h + 10 then
+                            ResetFlake(flake)
+                        end
+                        if flake.X < -10 then
+                            flake.X = w + 5
+                        elseif flake.X > w + 10 then
+                            flake.X = -5
+                        end
+                        flake.Label.Position = UDim2.fromOffset(flake.X, flake.Y)
                     end
-                    flake.Phase += dt
-                    flake.Y += flake.Speed * dt
-                    flake.X += (flake.Drift + math.sin(flake.Phase * 1.3) * 10) * dt
-                    if flake.Y > h + 10 then
-                        ResetFlake(flake)
-                    end
-                    if flake.X < -10 then
-                        flake.X = w + 5
-                    elseif flake.X > w + 10 then
-                        flake.X = -5
-                    end
-                    flake.Label.Position = UDim2.fromOffset(flake.X, flake.Y)
                 end
             end)
             table.insert(Library.Signals, SnowConn)
@@ -16925,12 +16938,18 @@ function Library:CreateWindow(WindowInfo)
 
         local function StopSnowVisual()
             SnowLayer.Visible = false
+            -- keep connection alive (cheap early-return); reconnect on enable rebuilds flakes
         end
 
         local function SetSnowEnabled(Enabled: boolean)
             SnowEnabled = Enabled == true
             if SnowEnabled then
-                StartSnow()
+                -- defer one frame so layout/AbsoluteSize are valid after config load
+                task.defer(function()
+                    if SnowEnabled then
+                        StartSnow()
+                    end
+                end)
             else
                 StopSnowVisual()
             end
